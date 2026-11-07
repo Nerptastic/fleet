@@ -1,5 +1,10 @@
 /tmp
 /out-tsc
+/dist
+/.idea
+.env
+.env.*
+!.env.example
 
 /node_modules
 npm-debug.log*

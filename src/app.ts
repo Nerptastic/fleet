@@ -1,14 +1,16 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import express, { type ErrorRequestHandler } from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { agentId, createFleetServer } from './tools.js';
+import { type MessageStore } from './store.js';
 
 interface AppOptions {
   apiToken: string;
   checkDatabase: () => Promise<void>;
+  store: MessageStore;
 }
 
-export function createApp({ apiToken, checkDatabase }: AppOptions) {
+export function createApp({ apiToken, checkDatabase, store }: AppOptions) {
   if (!apiToken.trim()) throw new Error('FLEET_API_TOKEN must not be empty');
   const app = express();
   app.disable('x-powered-by');
@@ -27,7 +29,7 @@ export function createApp({ apiToken, checkDatabase }: AppOptions) {
     }
   });
 
-  // Bootstrap authentication only. Per-agent credentials come with registration.
+  // One shared POC credential. Agent labels are NOT independent authentication.
   app.use('/api/fleet', (req, res, next) => {
     const suppliedHash = createHash('sha256').update(req.headers.authorization ?? '').digest();
     if (!timingSafeEqual(tokenHash, suppliedHash)) {
@@ -38,19 +40,19 @@ export function createApp({ apiToken, checkDatabase }: AppOptions) {
   });
 
   app.post('/api/fleet', express.json({ limit: '256kb' }), async (req, res) => {
-    // Stateless transport: agent conversations will live in PostgreSQL, not MCP sessions.
-    const server = new McpServer({ name: 'fleet', version: '0.1.0' });
-    server.registerTool('fleet_status', {
-      description: 'Check whether the Fleet communication service and database are available. Agent messaging is not implemented yet.',
-      inputSchema: {},
-    }, async () => {
-      try {
-        await checkDatabase();
-        return { content: [{ type: 'text', text: JSON.stringify({ status: 'ready', messaging: 'not_implemented' }) }] };
-      } catch {
-        return { isError: true, content: [{ type: 'text', text: 'Fleet database is unavailable.' }] };
-      }
-    });
+    const identity = agentId.safeParse(req.get('X-Fleet-Agent'));
+    if (!identity.success) {
+      res.status(400).json({ error: 'X-Fleet-Agent header required: 1-64 lowercase letters, digits, underscores or hyphens; start with a letter or digit.' });
+      return;
+    }
+    try {
+      await store.registerAgent(identity.data);
+    } catch {
+      res.status(503).json({ error: 'Fleet storage unavailable' });
+      return;
+    }
+    // Conversations persist in PostgreSQL, not in transport sessions.
+    const server = createFleetServer(identity.data, store, checkDatabase);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

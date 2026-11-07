@@ -1,25 +1,6 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
 import { test } from 'node:test';
-import { createApp } from '../src/app.js';
-
-async function withApp(checkDatabase: () => Promise<void>, run: (url: string) => Promise<void>) {
-  const server = createApp({ apiToken: 'test-token', checkDatabase }).listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert(address && typeof address !== 'string');
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  }
-}
-
-const headers = {
-  authorization: 'Bearer test-token',
-  'content-type': 'application/json',
-  accept: 'application/json, text/event-stream',
-};
+import { headers, withApp } from './helpers.js';
 
 test('health and readiness', async () => {
   await withApp(async () => {}, async url => {
@@ -60,7 +41,9 @@ test('MCP initializes, lists tools, and checks Fleet status', async () => {
     });
     assert.equal(init.result.serverInfo.name, 'fleet');
     const tools = await rpc('tools/list', {});
-    assert.deepEqual(tools.result.tools.map((tool: { name: string }) => tool.name), ['fleet_status']);
+    assert.deepEqual(tools.result.tools.map((tool: { name: string }) => tool.name), [
+      'fleet_status', 'list_agents', 'send_message', 'check_inbox', 'reply', 'acknowledge', 'read_thread',
+    ]);
     const result = await rpc('tools/call', { name: 'fleet_status', arguments: {} });
     assert.equal(JSON.parse(result.result.content[0].text).status, 'ready');
   });
